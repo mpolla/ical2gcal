@@ -14,6 +14,8 @@ use strict;
 use warnings;
 use LWP::Simple;
 
+my $credentialsfile = $ENV{"HOME"} . "/.ical2gcalrc";
+
 # This is what a Google Calendar Atom/xml file should look like
 my $template = <<END;
 <entry xmlns='http://www.w3.org/2005/Atom' xmlns:gd='http://schemas.google.com/g/2005'>
@@ -38,6 +40,11 @@ sub timeformat {
     return $tmp;
 }
 
+sub exitnocredentials {
+    print "Set credentials Email and Passwd in $credentialsfile\n";
+    exit 1;    
+}
+
 sub getauthtoken {
     for (split /\n/, shift) { 
         return $1 if $_ =~ /^Auth=(.*)$/; 
@@ -46,10 +53,8 @@ sub getauthtoken {
 }
 
 sub getcredentials {
-    my $credentialsfile = $ENV{"HOME"} . "/.ical2googlecalendarrc";
     if (! -e $credentialsfile ) {
-        print "Set credentials Email and Passwd in $credentialsfile";
-        exit 1;
+        exitnocredentials;
     }
     open FILE, $credentialsfile or die "Credentials not found in $credentialsfile";
     my $email = "";
@@ -60,8 +65,7 @@ sub getcredentials {
     }
     close FILE;
     if ($email eq "" || $passwd eq "") {
-        print "Set credentials Email and Passwd in $credentialsfile";
-        exit 1;
+        exitnocredentials;
     }
     return ($email, $passwd);
 }
