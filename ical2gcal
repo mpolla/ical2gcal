@@ -22,6 +22,7 @@ our $VERSION = 0.1;
 my $credentialsfile = $ENV{'HOME'} . '/.ical2gcalrc';
 
 # This is what a Google Calendar Atom/xml file should look like
+# https://developers.google.com/google-apps/calendar/v2/developers_guide_protocol#CreatingEvents
 my $template = <<'END';
 <entry xmlns='http://www.w3.org/2005/Atom' xmlns:gd='http://schemas.google.com/g/2005'>
   <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/g/2005#event'></category>
@@ -41,8 +42,10 @@ END
 # From 20140109T090000 to 2014-01-09T09:00:00.000Z
 sub timeformat {
     my $tmp = shift;
-    $tmp =~
-      s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000Z/gxms;
+    if ( defined $tmp ) {
+        $tmp =~
+s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000/gxms;
+    }
     return $tmp;
 }
 
@@ -157,22 +160,23 @@ $req->content($template);
 my $r = $ua->request($req);
 my $redirurl;
 if ( $r->code == HTTP_FOUND ) {
-    if ( $r->content =~
-        /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/xms )
-    {
+    if ( $r->content =~ /.*?<A HREF="(.*?)">here<\/A>.*/xms ) {
         $redirurl = $1;
     }
     $req = HTTP::Request->new( 'POST', $redirurl );
     $req->header( 'Content-Type' => 'application/atom+xml' );
     $req->content($template);
     $r = $ua->request($req);
-    if ( !$r->is_success ) {
-        croak 'Error: ', $r->status_line;
-    }
 }
 
 if ( $r->code == HTTP_CREATED ) {
     print 'Created event ' . $idata{'SUMMARY'} . ' on ' . substr $starttime, 0,
       length('yyyy-mm-ddTHH:MM') . "\n"
       or croak 'Could not print result.';
+}
+else {
+    print 'HTTP code ' . $r->code . "\n" or croak 'Could not print.';
+    print $r->content . "\n"             or croak 'Could not print.';
+    print $template                      or croak 'Could not print.';
+    exit 1;
 }
