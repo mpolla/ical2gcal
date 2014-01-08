@@ -150,5 +150,5 @@ if ($r->code == 302) {
 }
 
 if ($r->code == 201) {
-    print "Created event " . $idata{"SUMMARY"} . " on " . $starttime . "\n";
+    print "Created event " . $idata{"SUMMARY"} . " on " . substr($starttime,0,16) . "\n";
 }
