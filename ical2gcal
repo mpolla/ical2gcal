@@ -116,7 +116,7 @@ my %config = (
     Email => $email,
     Passwd => $passwd,
     Serivce => "cl",
-    Source => "ical2googlecalendaar"
+    Source => "ical2gcal"
     );
 
 my $ua = LWP::UserAgent->new;
