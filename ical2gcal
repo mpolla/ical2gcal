@@ -5,8 +5,8 @@
 # 
 # Useage: ical2gcal < lunch.ical
 
-# 
-# curl https://www.google.com/accounts/ClientLogin --data-urlencode Email=matti.polla@gmail.com --data-urlencode Passwd=*************** -d accountType=GOOGLE -d source=ical2gcal -d service=cl
+# For debuggin purposes, here's how to upload new calendar events using curl
+# curl https://www.google.com/accounts/ClientLogin --data-urlencode Email=x.y@gmail.com --data-urlencode Passwd=*************** -d accountType=GOOGLE -d source=ical2gcal -d service=cl
 # curl -X POST -d @tennis.ical https://www.google.com/calendar/feeds/default/private/full --header "Content-Type:application/atom+xml" --header "Authorization: GoogleLogin auth=****"
 # curl -X POST -d @tennis.ical https://www.google.com/calendar/feeds/default/private/full?t=**** --header "Content-Type:application/atom+xml" --header "Authorization: GoogleLogin auth=****"
 
