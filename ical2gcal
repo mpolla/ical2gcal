@@ -73,6 +73,7 @@ sub getcredentials {
 my @buff = ();
 my @ical = ();
 
+# Unwrap lines VCALENDAR data
 while (<>) {
     chomp();
     if (! m/^\s/) {
@@ -108,6 +109,7 @@ if (length $endtime) { $template =~ s/GCAL_ENDTIME/$endtime/; }
 
 (my $email, my $passwd) = getcredentials;
 
+# Get authentication token
 my %config = (
     URL => "https://www.google.com/accounts/ClientLogin",
     AccountType=> "GOOGLE",   
@@ -133,6 +135,7 @@ $config{AuthToken} = getauthtoken($response->content);
 
 $ua->default_header('Authorization' => "GoogleLogin auth=$config{AuthToken}");
 
+# POST Atom/xml calendar data to Google Calendar
 my $req = HTTP::Request->new( 'POST', 'https://www.google.com/calendar/feeds/default/private/full'  );
 $req->header( 'Content-Type' => 'application/atom+xml' );
 $req->content( $template );
