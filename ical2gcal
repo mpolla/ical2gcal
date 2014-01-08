@@ -1,0 +1,151 @@
+#!/usr/bin/perl -w
+#
+# Create a new Google Calendar event from an iCal file
+# input.
+# 
+# Useage: ical2gcal < lunch.ical
+
+# 
+# curl https://www.google.com/accounts/ClientLogin --data-urlencode Email=matti.polla@gmail.com --data-urlencode Passwd=*************** -d accountType=GOOGLE -d source=ical2gcal -d service=cl
+# curl -X POST -d @tennis.ical https://www.google.com/calendar/feeds/default/private/full --header "Content-Type:application/atom+xml" --header "Authorization: GoogleLogin auth=****"
+# curl -X POST -d @tennis.ical https://www.google.com/calendar/feeds/default/private/full?t=**** --header "Content-Type:application/atom+xml" --header "Authorization: GoogleLogin auth=****"
+
+use LWP::Simple;
+
+# This is what a Google Calendar Atom/xml file should look like
+$template = <<END;
+<entry xmlns='http://www.w3.org/2005/Atom' xmlns:gd='http://schemas.google.com/g/2005'>
+  <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/g/2005#event'></category>
+  <title type='text'>GCAL_TITLE</title>
+  <content type='text'>GCAL_CONTENT</content>
+  <gd:transparency
+    value='http://schemas.google.com/g/2005#event.opaque'>
+  </gd:transparency>
+  <gd:eventStatus
+    value='http://schemas.google.com/g/2005#event.confirmed'>
+  </gd:eventStatus>
+  <gd:where valueString='GCAL_WHERE'></gd:where>
+  <gd:when startTime='GCAL_STARTTIME' endTime='GCAL_ENDTIME'></gd:when>
+</entry>
+END
+
+# From 20140109T090000 to 2014-01-09T09:00:00.000Z
+sub timeformat {
+    $tmp = $_[0];
+    $tmp =~ s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000Z/g;
+    return $tmp;
+}
+
+sub getauthtoken {
+    for (split /\n/, shift) { 
+        return $1 if $_ =~ /^Auth=(.*)$/; 
+    }
+    return '';
+}
+
+sub getcredentials {
+    $credentialsfile = $ENV{"HOME"} . "/.ical2googlecalendarrc";
+    if (! -e $credentialsfile ) {
+        print "Set credentials Email and Passwd in $credentialsfile";
+        exit 1;
+    }
+    open FILE, $credentialsfile or die "Credentials not found in $credentialsfile";
+    $email = "";
+    $passwd = "";
+    for (<FILE>) {
+        $email = $1 if $_ =~ /^Email=(.*)$/; 
+        $passwd = $1 if $_ =~ /^Passwd=(.*)$/; 
+    }
+    close FILE;
+    if ($email eq "" || $passwd eq "") {
+        print "Set credentials Email and Passwd in $credentialsfile";
+        exit 1;
+    }
+    return ($email, $passwd);
+}
+
+
+
+    @buff = ();
+    @ical = ();
+
+while (<>) {
+    chomp();
+    if (! m/^\s/) {
+        $tmp = "";
+        while ($l = shift(@buff)) {
+            $tmp .= $l;
+        }
+        push(@ical, $tmp);
+        
+    }
+    s/^\s+(.*)$/$1/g;
+    push(@buff, $_);
+}
+
+undef %idata;
+while ($l = pop(@ical)) {
+    my @val = split(/\:/, $l);
+    $val[0] =~ s/;LANGUAGE=..-..//g;
+    $idata{$val[0]} = @val[1..$#val];
+    $idata{$val[0]} =~ s/\\n/ /g;
+    $idata{$val[0]} =~ s/\\//g;
+}
+
+#foreach $key (sort keys %idata) { print "$key: $idata{$key}\n"; }
+
+if (length $idata{"SUMMARY"}) { $template =~ s/GCAL_TITLE/$idata{"SUMMARY"}/; }
+if (length $idata{"DESCRIPTION"}) { $template =~ s/GCAL_CONTENT/$idata{"DESCRIPTION"}/; }
+if (length $idata{"LOCATION"}) { $template =~ s/GCAL_WHERE/$idata{"LOCATION"}/; }
+$starttime = timeformat($idata{"DTSTART;TZID=FLE Standard Time"});
+$endtime = timeformat($idata{"DTEND;TZID=FLE Standard Time"});
+if (length $starttime) { $template =~ s/GCAL_STARTTIME/$starttime/; }
+if (length $endtime) { $template =~ s/GCAL_ENDTIME/$endtime/; }
+
+
+
+
+($email, $passwd) = getcredentials;
+
+my %config = (
+    URL => "https://www.google.com/accounts/ClientLogin",
+    AccountType=> "GOOGLE",   
+    Email => $email,
+    Passwd => $passwd,
+    Serivce => "cl",
+    Source => "ical2googlecalendaar"
+    );
+
+my $ua = LWP::UserAgent->new;
+my $response = $ua->post(
+    $config{URL},
+    {
+        accountType=> $config{AccountType},
+        Email=> $config{Email},
+        Passwd=> $config{Passwd},
+        service=> $config{Serivce},
+        source=> $config{Source}
+    }
+    ); 
+die "\nError: ", $response->status_line unless $response->is_success;
+$config{AuthToken} = getauthtoken($response->content);
+
+$ua->default_header('Authorization' => "GoogleLogin auth=$config{AuthToken}");
+
+my $req = HTTP::Request->new( 'POST', 'https://www.google.com/calendar/feeds/default/private/full'  );
+$req->header( 'Content-Type' => 'application/atom+xml' );
+$req->content( $template );
+$r = $ua->request( $req );
+if ($r->code == 302) {
+    $redirurl = $1 if $r->content =~ /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/;
+    my $req = HTTP::Request->new( 'POST', $redirurl  );
+    $req->header( 'Content-Type' => 'application/atom+xml' );
+    $req->content( $template );
+    $r = $ua->request( $req );
+    die "\nError: ", $r->status_line unless $r->is_success;
+}
+
+
+if ($r->code == 201) {
+    print "Created event " . $idata{"SUMMARY"} . " on " . $starttime . "\n";
+}
