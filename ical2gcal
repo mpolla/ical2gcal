@@ -12,12 +12,13 @@
 
 use strict;
 use warnings;
+use Carp;
 use LWP::Simple;
 
 my $credentialsfile = $ENV{"HOME"} . "/.ical2gcalrc";
 
 # This is what a Google Calendar Atom/xml file should look like
-my $template = <<END;
+my $template = <<'END';
 <entry xmlns='http://www.w3.org/2005/Atom' xmlns:gd='http://schemas.google.com/g/2005'>
   <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/g/2005#event'></category>
   <title type='text'>GCAL_TITLE</title>
@@ -36,18 +37,17 @@ END
 # From 20140109T090000 to 2014-01-09T09:00:00.000Z
 sub timeformat {
     my $tmp = shift;
-    $tmp =~ s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000Z/g;
+    $tmp =~ s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000Z/gx;
     return $tmp;
 }
 
 sub exitnocredentials {
-    print "Set credentials Email and Passwd in $credentialsfile\n";
-    exit 1;    
+    croak "Set credentials Email and Passwd in $credentialsfile\n";
 }
 
 sub getauthtoken {
-    for (split /\n/, shift) { 
-        return $1 if $_ =~ /^Auth=(.*)$/; 
+    for (split /\n/x, shift) { 
+        return $1 if $_ =~ /^Auth=(.*)$/x; 
     }
     return '';
 }
@@ -56,12 +56,12 @@ sub getcredentials {
     if (! -e $credentialsfile ) {
         exitnocredentials;
     }
-    open my $FILE, "<",$credentialsfile or die "Credentials not found in $credentialsfile";
+    open my $FILE, "<",$credentialsfile or croak "Credentials not found in $credentialsfile";
     my $email = "";
     my $passwd = "";
     while (<$FILE>) {
-        $email = $1 if $_ =~ /^Email=(.*)$/; 
-        $passwd = $1 if $_ =~ /^Passwd=(.*)$/; 
+        if ($_ =~ /^Email=(.*)$/x) { $email = $1 }; 
+        if ($_ =~ /^Passwd=(.*)$/x) { $passwd = $1 }; 
     }
     close $FILE;
     if ($email eq "" || $passwd eq "") {
@@ -76,7 +76,7 @@ my @ical = ();
 # Unwrap lines VCALENDAR data
 while (<>) {
     chomp();
-    if (! m/^\s/) {
+    if (! m/^\s/x) {
         my $tmp = "";
         while (my $l = shift(@buff)) {
             $tmp .= $l;
@@ -84,17 +84,17 @@ while (<>) {
         push(@ical, $tmp);
         
     }
-    s/^\s+(.*)$/$1/g;
+    s/^\s+(.*)$/$1/gx;
     push(@buff, $_);
 }
 
 undef my %idata;
 while (my $l = pop(@ical)) {
-    my @val = split(/\:/, $l);
-    $val[0] =~ s/;LANGUAGE=..-..//g;
+    my @val = split(/\:/x, $l);
+    $val[0] =~ s/;LANGUAGE=..-..//gx;
     $idata{$val[0]} = @val[1..$#val];
-    $idata{$val[0]} =~ s/\\n/ /g;
-    $idata{$val[0]} =~ s/\\//g;
+    $idata{$val[0]} =~ s/\\n/ /gx;
+    $idata{$val[0]} =~ s/\\//gx;
 }
 
 #foreach $key (sort keys %idata) { print "$key: $idata{$key}\n"; }
@@ -130,7 +130,7 @@ my $response = $ua->post(
         source=> $config{Source}
     }
     ); 
-die "\nError: ", $response->status_line unless $response->is_success;
+croak "\nError: ", $response->status_line unless $response->is_success;
 $config{AuthToken} = getauthtoken($response->content);
 
 $ua->default_header('Authorization' => "GoogleLogin auth=$config{AuthToken}");
@@ -142,12 +142,14 @@ $req->content( $template );
 my $r = $ua->request( $req );
 my $redirurl;
 if ($r->code == 302) {
-    $redirurl = $1 if $r->content =~ /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/;
+    if ($r->content =~ /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/x) {
+        $redirurl = $1;
+    }
     $req = HTTP::Request->new( 'POST', $redirurl  );
     $req->header( 'Content-Type' => 'application/atom+xml' );
     $req->content( $template );
     $r = $ua->request( $req );
-    die "\nError: ", $r->status_line unless $r->is_success;
+    croak "\nError: ", $r->status_line unless $r->is_success;
 }
 
 if ($r->code == 201) {
