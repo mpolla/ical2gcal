@@ -35,7 +35,7 @@ END
 
 # From 20140109T090000 to 2014-01-09T09:00:00.000Z
 sub timeformat {
-    my $tmp = $_[0];
+    my $tmp = shift;
     $tmp =~ s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000Z/g;
     return $tmp;
 }
@@ -56,14 +56,14 @@ sub getcredentials {
     if (! -e $credentialsfile ) {
         exitnocredentials;
     }
-    open FILE, $credentialsfile or die "Credentials not found in $credentialsfile";
+    open my $FILE, "<",$credentialsfile or die "Credentials not found in $credentialsfile";
     my $email = "";
     my $passwd = "";
-    for (<FILE>) {
+    while (<$FILE>) {
         $email = $1 if $_ =~ /^Email=(.*)$/; 
         $passwd = $1 if $_ =~ /^Passwd=(.*)$/; 
     }
-    close FILE;
+    close $FILE;
     if ($email eq "" || $passwd eq "") {
         exitnocredentials;
     }
@@ -140,9 +140,10 @@ my $req = HTTP::Request->new( 'POST', 'https://www.google.com/calendar/feeds/def
 $req->header( 'Content-Type' => 'application/atom+xml' );
 $req->content( $template );
 my $r = $ua->request( $req );
+my $redirurl;
 if ($r->code == 302) {
-    my $redirurl = $1 if $r->content =~ /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/;
-    my $req = HTTP::Request->new( 'POST', $redirurl  );
+    $redirurl = $1 if $r->content =~ /.*?The document has moved <A HREF="(.*?)">here<\/A>.*/;
+    $req = HTTP::Request->new( 'POST', $redirurl  );
     $req->header( 'Content-Type' => 'application/atom+xml' );
     $req->content( $template );
     $r = $ua->request( $req );
