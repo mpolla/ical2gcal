@@ -79,11 +79,33 @@ sub getcredentials {
     return ( $email, $passwd );
 }
 
+
+
 my @buff = ();
 my @ical = ();
 
+my $ICALSTREAM;
+if ( defined($ARGV[0]) && ($ARGV[0] eq '--help' || $ARGV[0] eq '--usage') ) {
+    print "Usage: ical2gcal [file.ical]\n";
+    exit 0;
+}
+elsif ( ! defined($ARGV[0]) ) {
+    open $ICALSTREAM, "<&STDIN" or croak 'Could not open STDIN.';
+}
+else {
+    open $ICALSTREAM, '<', $ARGV[0] or croak 'Could not open file.';
+}
+
 # Unwrap lines VCALENDAR data
-while (<>) {
+my $icaldata = 0;
+while (<$ICALSTREAM>) {
+    if ( m/^BEGIN\:VCALENDAR/xms) {
+        $icaldata = 1;
+    }
+    elsif ( m/^END\:VCALENDAR/xms) {
+        $icaldata = 0;
+    }
+    next if (! $icaldata);
     chomp;
     if ( !m/^\s/xms ) {
         my $tmp = q{};
@@ -96,6 +118,7 @@ while (<>) {
     s/^\s+(.*)$/$1/gxms;
     push @buff, $_;
 }
+close $ICALSTREAM;
 
 undef my %idata;
 while ( my $l = pop @ical ) {
