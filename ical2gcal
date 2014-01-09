@@ -160,7 +160,7 @@ $req->content($template);
 my $r = $ua->request($req);
 my $redirurl;
 if ( $r->code == HTTP_FOUND ) {
-    if ( $r->content =~ /.*?<A HREF="(.*?)">here<\/A>.*/xms ) {
+    if ( $r->content =~ /.*?<A\sHREF="(.*?)">here<\/A>.*/xms ) {
         $redirurl = $1;
     }
     $req = HTTP::Request->new( 'POST', $redirurl );
