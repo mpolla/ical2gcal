@@ -20,11 +20,127 @@ use Term::ReadKey;
 
 our $VERSION = 0.1;
 
-my $credentialsfile = $ENV{'HOME'} . '/.ical2gcalrc';
+my $CREDENTIALSFILE = $ENV{'HOME'} . '/.ical2gcalrc';
+undef my $USERNAME;
+undef my $PASSWORD;
+
+# From 20140109T090000 to 2014-01-09T09:00:00.000Z
+sub timeformat {
+    my $time = shift;
+    if ( defined $time ) {
+        $time =~
+s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000/gxms;
+    }
+    return $time;
+}
+
+sub getcredentials {
+    if ( !-e $CREDENTIALSFILE ) {
+        if ( !defined $ARGV[0] ) {
+
+            croak "Set credentials Email and Passwd in $CREDENTIALSFILE\n";
+        }
+        return ( q{}, q{} );
+    }
+    open my $FILE, '<', $CREDENTIALSFILE
+      or croak "Credentials not found in $CREDENTIALSFILE";
+    while (<$FILE>) {
+        if ( $_ =~ /^Email=(.*)$/xms )  { $USERNAME = $1 }
+        if ( $_ =~ /^Passwd=(.*)$/xms ) { $PASSWORD = $1 }
+    }
+    close $FILE or croak 'Could not close credentials file.';
+    if ( $USERNAME eq q{} || $PASSWORD eq q{} ) {
+        croak "Set credentials Email and Passwd in $CREDENTIALSFILE\n";
+    }
+}
+
+sub promptcredentials {
+    print "Google Calendar username: ";
+    ReadMode 'normal';
+    $USERNAME = chomp( my $usr = ReadLine 0 );
+    print "Google Calendar password: ";
+    ReadMode 'noecho';
+    $PASSWORD = chomp( my $pass = ReadLine 0 );
+    ReadMode 'restore';
+    return;
+}
+
+sub credentials {
+    if ( defined($USERNAME) and defined($PASSWORD) ) {
+        return;
+    }
+    getcredentials;
+    if ( defined $ARGV[0] and ( $USERNAME eq q{} or $PASSWORD eq q{} ) ) {
+        promptcredentials;
+    }
+    return;
+}
+
+sub main {
+    my @buff = ();
+    my @ical = ();
+    my $ICALSTREAM;
+    if ( defined( $ARGV[0] )
+        && ( $ARGV[0] eq '--help' || $ARGV[0] eq '--usage' ) )
+    {
+        print "Usage: ical2gcal [file.ical]\n";
+        exit 0;
+    }
+    elsif ( !defined( $ARGV[0] ) ) {
+        open $ICALSTREAM, "<&STDIN" or croak 'Could not open STDIN.';
+    }
+    else {
+        open $ICALSTREAM, '<', $ARGV[0] or croak 'Could not open file.';
+    }
+
+    # Unwrap lines VCALENDAR data
+    my $icaldata = 0;
+    while (<$ICALSTREAM>) {
+        if (m/^BEGIN\:VCALENDAR/xms) {
+            $icaldata = 1;
+        }
+        elsif (m/^END\:VCALENDAR/xms) {
+            $icaldata = 0;
+            parseical( \@ical );
+            @ical = ();
+        }
+        next if ( !$icaldata );
+        chomp;
+        if ( !m/^\s/xms ) {
+            my $tmp = q{};
+            while ( my $l = shift @buff ) {
+                $tmp .= $l;
+            }
+            push @ical, $tmp;
+
+        }
+        s/^\s+(.*)$/$1/gxms;
+        push @buff, $_;
+    }
+    close $ICALSTREAM;
+    return;
+}
+
+sub parseical {
+    my @ical = @{ $_[0] };
+    undef my %idata;
+    while ( my $l = pop @ical ) {
+        my @val = split /\:/xms, $l;
+        $val[0] =~ s/;LANGUAGE=..-..//gxms;
+        $idata{ $val[0] } = @val[ 1 .. $#val ];
+        $idata{ $val[0] } =~ s/\\n/ /gxms;
+        $idata{ $val[0] } =~ s/\\//gxms;
+    }
+    uploadevent( \%idata );
+    return;
+}
+
+sub makeatom {
+    my %data = %{ $_[0] };
 
 # This is what a Google Calendar Atom/xml file should look like
 # https://developers.google.com/google-apps/calendar/v2/developers_guide_protocol#CreatingEvents
-my $template = <<'END';
+    my $atom = <<'END';
 <entry xmlns='http://www.w3.org/2005/Atom' xmlns:gd='http://schemas.google.com/g/2005'>
   <category scheme='http://schemas.google.com/g/2005#kind' term='http://schemas.google.com/g/2005#event'></category>
   <title type='text'>GCAL_TITLE</title>
@@ -40,183 +156,95 @@ my $template = <<'END';
 </entry>
 END
 
-# From 20140109T090000 to 2014-01-09T09:00:00.000Z
-sub timeformat {
-    my $tmp = shift;
-    if ( defined $tmp ) {
-        $tmp =~
-s/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/$1-$2-$3T$4:$5:$6.000/gxms;
+    if ( length $data{'SUMMARY'} ) {
+        $atom =~ s/GCAL_TITLE/$data{'SUMMARY'}/xms;
     }
-    return $tmp;
+    if ( length $data{'DESCRIPTION'} ) {
+        $atom =~ s/GCAL_CONTENT/$data{'DESCRIPTION'}/xms;
+    }
+    if ( length $data{'LOCATION'} ) {
+        $atom =~ s/GCAL_WHERE/$data{'LOCATION'}/xms;
+    }
+    my $starttime = timeformat( $data{'DTSTART;TZID=FLE Standard Time'} );
+    my $endtime   = timeformat( $data{'DTEND;TZID=FLE Standard Time'} );
+    if ( length $starttime ) { $atom =~ s/GCAL_STARTTIME/$starttime/xms; }
+    if ( length $endtime )   { $atom =~ s/GCAL_ENDTIME/$endtime/xms; }
+    return $atom;
 }
 
-sub exitnocredentials {
-    croak "Set credentials Email and Passwd in $credentialsfile\n";
-}
+sub googleauth {
+    credentials;
 
-sub getauthtoken {
-    for ( split /\n/xms, shift ) {
+    # Get authentication token
+    my %config = (
+        URL         => 'https://www.google.com/accounts/ClientLogin',
+        AccountType => 'GOOGLE',
+        Email       => $USERNAME,
+        Passwd      => $PASSWORD,
+        Serivce     => 'cl',
+        Source      => 'ical2gcal',
+    );
+    my $ua       = LWP::UserAgent->new;
+    my $response = $ua->post(
+        $config{URL},
+        {
+            accountType => $config{AccountType},
+            Email       => $config{Email},
+            Passwd      => $config{Passwd},
+            service     => $config{Serivce},
+            source      => $config{Source}
+        }
+    );
+    if ( !$response->is_success || $response->code != HTTP_OK ) {
+        croak "\nError: ", $response->status_line;
+    }
+    for ( split /\n/xms, $response->content ) {
         return $1 if $_ =~ /^Auth=(.*)$/xms;
     }
     return q{};
 }
 
-sub getcredentials {
-    if ( !-e $credentialsfile ) {
-        if (! defined $ARGV[0]) {
-            exitnocredentials;
-        }
-        return (q{},q{});
-    }
-    open my $FILE, '<', $credentialsfile
-      or croak "Credentials not found in $credentialsfile";
-    my $email  = q{};
-    my $passwd = q{};
-    while (<$FILE>) {
-        if ( $_ =~ /^Email=(.*)$/xms )  { $email  = $1 }
-        if ( $_ =~ /^Passwd=(.*)$/xms ) { $passwd = $1 }
-    }
-    close $FILE or croak 'Could not close credentials file.';
-    if ( $email eq q{} || $passwd eq q{} ) {
-        exitnocredentials;
-    }
-    return ( $email, $passwd );
-}
+sub uploadevent {
+    my %data  = %{ $_[0] };
+    my $atom  = makeatom( \%data );
+    my $token = googleauth;
+    my $ua    = LWP::UserAgent->new;
+    $ua->default_header( 'Authorization' => "GoogleLogin auth=$token" );
 
-sub promptcredentials {
-    print "Google Calendar username: ";
-    ReadMode 'normal';
-    chomp (my $usr = ReadLine 0);
-    print "Google Calendar password: ";
-    ReadMode 'noecho';
-    chomp (my $pass = ReadLine 0);
-    ReadMode 'restore';
-
-    return ($usr,$pass);
-}
-
-my @buff = ();
-my @ical = ();
-
-my $ICALSTREAM;
-if ( defined($ARGV[0]) && ($ARGV[0] eq '--help' || $ARGV[0] eq '--usage') ) {
-    print "Usage: ical2gcal [file.ical]\n";
-    exit 0;
-}
-elsif ( ! defined($ARGV[0]) ) {
-    open $ICALSTREAM, "<&STDIN" or croak 'Could not open STDIN.';
-}
-else {
-    open $ICALSTREAM, '<', $ARGV[0] or croak 'Could not open file.';
-}
-
-# Unwrap lines VCALENDAR data
-my $icaldata = 0;
-while (<$ICALSTREAM>) {
-    if ( m/^BEGIN\:VCALENDAR/xms) {
-        $icaldata = 1;
-    }
-    elsif ( m/^END\:VCALENDAR/xms) {
-        $icaldata = 0;
-    }
-    next if (! $icaldata);
-    chomp;
-    if ( !m/^\s/xms ) {
-        my $tmp = q{};
-        while ( my $l = shift @buff ) {
-            $tmp .= $l;
-        }
-        push @ical, $tmp;
-
-    }
-    s/^\s+(.*)$/$1/gxms;
-    push @buff, $_;
-}
-close $ICALSTREAM;
-
-undef my %idata;
-while ( my $l = pop @ical ) {
-    my @val = split /\:/xms, $l;
-    $val[0] =~ s/;LANGUAGE=..-..//gxms;
-    $idata{ $val[0] } = @val[ 1 .. $#val ];
-    $idata{ $val[0] } =~ s/\\n/ /gxms;
-    $idata{ $val[0] } =~ s/\\//gxms;
-}
-
-#foreach $key (sort keys %idata) { print "$key: $idata{$key}\n"; }
-
-if ( length $idata{'SUMMARY'} ) {
-    $template =~ s/GCAL_TITLE/$idata{'SUMMARY'}/xms;
-}
-if ( length $idata{'DESCRIPTION'} ) {
-    $template =~ s/GCAL_CONTENT/$idata{'DESCRIPTION'}/xms;
-}
-if ( length $idata{'LOCATION'} ) {
-    $template =~ s/GCAL_WHERE/$idata{'LOCATION'}/xms;
-}
-my $starttime = timeformat( $idata{'DTSTART;TZID=FLE Standard Time'} );
-my $endtime   = timeformat( $idata{'DTEND;TZID=FLE Standard Time'} );
-if ( length $starttime ) { $template =~ s/GCAL_STARTTIME/$starttime/xms; }
-if ( length $endtime )   { $template =~ s/GCAL_ENDTIME/$endtime/xms; }
-
-( my $email, my $passwd ) = getcredentials;
-if (defined $ARGV[0] and ($email eq q{} or $passwd eq q{})) {
-    ( $email, $passwd ) = promptcredentials;
-}
-
-# Get authentication token
-my %config = (
-    URL         => 'https://www.google.com/accounts/ClientLogin',
-    AccountType => 'GOOGLE',
-    Email       => $email,
-    Passwd      => $passwd,
-    Serivce     => 'cl',
-    Source      => 'ical2gcal',
-);
-
-my $ua       = LWP::UserAgent->new;
-my $response = $ua->post(
-    $config{URL},
-    {
-        accountType => $config{AccountType},
-        Email       => $config{Email},
-        Passwd      => $config{Passwd},
-        service     => $config{Serivce},
-        source      => $config{Source}
-    }
-);
-if ( !$response->is_success || $response-> code != HTTP_OK ) {
-    croak "\nError: ", $response->status_line;
-}
-$config{AuthToken} = getauthtoken( $response->content );
-
-$ua->default_header( 'Authorization' => "GoogleLogin auth=$config{AuthToken}" );
-
-# POST Atom/xml calendar data to Google Calendar
-my $req = HTTP::Request->new( 'POST',
-    'https://www.google.com/calendar/feeds/default/private/full' );
-$req->header( 'Content-Type' => 'application/atom+xml' );
-$req->content($template);
-my $r = $ua->request($req);
-my $redirurl;
-if ( $r->code == HTTP_FOUND ) {
-    if ( $r->content =~ /.*?<A\sHREF="(.*?)">here<\/A>.*/xms ) {
-        $redirurl = $1;
-    }
-    $req = HTTP::Request->new( 'POST', $redirurl );
+    # POST Atom/xml calendar data to Google Calendar
+    my $req = HTTP::Request->new( 'POST',
+        'https://www.google.com/calendar/feeds/default/private/full' );
     $req->header( 'Content-Type' => 'application/atom+xml' );
-    $req->content($template);
-    $r = $ua->request($req);
+    $req->content($atom);
+    my $r = $ua->request($req);
+    my $redirurl;
+    if ( $r->code == HTTP_FOUND ) {
+        if ( $r->content =~ /.*?<A\sHREF="(.*?)">here<\/A>.*/xms ) {
+            $redirurl = $1;
+        }
+        $req = HTTP::Request->new( 'POST', $redirurl );
+        $req->header( 'Content-Type' => 'application/atom+xml' );
+        $req->content($atom);
+        $r = $ua->request($req);
+    }
+
+    if ( $r->code == HTTP_CREATED ) {
+        print 'Created event '
+          . $data{'SUMMARY'} . ' on '
+          . (
+            substr timeformat( $data{'DTSTART;TZID=FLE Standard Time'} ),
+            0, length('yyyy-mm-ddTHH:MM')
+          )
+          . "\n"
+          or croak 'Could not print result.';
+    }
+    else {
+        print 'HTTP code ' . $r->code . "\n" or croak 'Could not print.';
+        print $r->content . "\n"             or croak 'Could not print.';
+        print $atom                          or croak 'Could not print.';
+        exit 1;
+    }
+    return;
 }
 
-if ( $r->code == HTTP_CREATED ) {
-    print 'Created event ' . $idata{'SUMMARY'} . ' on ' . substr $starttime, 0,
-      length('yyyy-mm-ddTHH:MM') . "\n"
-      or croak 'Could not print result.';
-}
-else {
-    print 'HTTP code ' . $r->code . "\n" or croak 'Could not print.';
-    print $r->content . "\n"             or croak 'Could not print.';
-    print $template                      or croak 'Could not print.';
-    exit 1;
-}
+main;
