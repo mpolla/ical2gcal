@@ -16,6 +16,7 @@ use warnings;
 use Carp;
 use LWP::Simple;
 use HTTP::Status qw(:constants :is status_message);
+use Term::ReadKey;
 
 our $VERSION = 0.1;
 
@@ -62,7 +63,10 @@ sub getauthtoken {
 
 sub getcredentials {
     if ( !-e $credentialsfile ) {
-        exitnocredentials;
+        if (! defined $ARGV[0]) {
+            exitnocredentials;
+        }
+        return (q{},q{});
     }
     open my $FILE, '<', $credentialsfile
       or croak "Credentials not found in $credentialsfile";
@@ -79,7 +83,17 @@ sub getcredentials {
     return ( $email, $passwd );
 }
 
+sub promptcredentials {
+    print "Google Calendar username: ";
+    ReadMode 'normal';
+    chomp (my $usr = ReadLine 0);
+    print "Google Calendar password: ";
+    ReadMode 'noecho';
+    chomp (my $pass = ReadLine 0);
+    ReadMode 'restore';
 
+    return ($usr,$pass);
+}
 
 my @buff = ();
 my @ical = ();
@@ -146,6 +160,9 @@ if ( length $starttime ) { $template =~ s/GCAL_STARTTIME/$starttime/xms; }
 if ( length $endtime )   { $template =~ s/GCAL_ENDTIME/$endtime/xms; }
 
 ( my $email, my $passwd ) = getcredentials;
+if (defined $ARGV[0] and ($email eq q{} or $passwd eq q{})) {
+    ( $email, $passwd ) = promptcredentials;
+}
 
 # Get authentication token
 my %config = (
@@ -168,8 +185,8 @@ my $response = $ua->post(
         source      => $config{Source}
     }
 );
-if ( !$response->is_success ) {
-    croak 'Error: ', $response->status_line;
+if ( !$response->is_success || $response-> code != HTTP_OK ) {
+    croak "\nError: ", $response->status_line;
 }
 $config{AuthToken} = getauthtoken( $response->content );
 
